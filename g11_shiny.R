@@ -7,9 +7,8 @@ library(shiny)
 library(plotly)    
 library(viridis)   
 library(tidyverse)
+library(maps)
 library(sf)
-
-options(shiny.autoreload = TRUE)
 
 ############################################################
 # SECTION 1: DATA PREPARATION
@@ -18,7 +17,6 @@ options(shiny.autoreload = TRUE)
 car_data <- read.csv('https://uwmadison.box.com/shared/static/e73vopf1jcyi3fwyu6pkb8jp2xnqu3zg.csv')
 
 # Data cleaning for Odometer vs Selling Price by Make graph
-
 car_data_odometer <- car_data %>%
   mutate(
     make = str_to_title(make),
@@ -72,6 +70,38 @@ state_map <- c(
 )
 
 ### Helper functions
+# Function to load and prepare car data
+prepare_car_data <- function(data) {
+  # Brand standardization mapping
+  brand_map <- c(
+    "kia" = "Kia", "bmw" = "BMW", "volvo" = "Volvo", "nissan" = "Nissan", "chevrolet" = "Chevrolet",
+    "audi" = "Audi", "ford" = "Ford", "hyundai" = "Hyundai", "buick" = "Buick", "cadillac" = "Cadillac",
+    "acura" = "Acura", "lexus" = "Lexus", "infiniti" = "Infiniti", "jeep" = "Jeep", "mercedes-benz" = "Mercedes-Benz",
+    "mitsubishi" = "Mitsubishi", "mazda" = "Mazda", "mini" = "MINI", "land rover" = "Land Rover", "lincoln" = "Lincoln",
+    "jaguar" = "Jaguar", "volkswagen" = "Volkswagen", "vw" = "Volkswagen", "toyota" = "Toyota", "subaru" = "Subaru",
+    "scion" = "Scion", "porsche" = "Porsche", "dodge" = "Dodge", "fiat" = "FIAT", "chrysler" = "Chrysler",
+    "ferrari" = "Ferrari", "honda" = "Honda", "gmc" = "GMC", "ram" = "Ram", "smart" = "Smart",
+    "bentley" = "Bentley", "pontiac" = "Pontiac", "saturn" = "Saturn", "maserati" = "Maserati", "mercury" = "Mercury",
+    "hummer" = "HUMMER", "landrover" = "Land Rover", "gmc truck" = "GMC", "rolls-royce" = "Rolls-Royce",
+    "oldsmobile" = "Oldsmobile", "isuzu" = "Isuzu", "geo" = "Geo", "daewoo" = "Daewoo", "plymouth" = "Plymouth",
+    "tesla" = "Tesla", "airstream" = "Airstream", "dot" = "DOT", "aston martin" = "Aston Martin", "fisker" = "Fisker",
+    "lamborghini" = "Lamborghini", "lotus" = "Lotus", "dodge tk" = "Dodge", "chev truck" = "Chevrolet", "ford tk" = "Ford",
+    "ford truck" = "Ford", "saab" = "Saab", "suzuki" = "Suzuki"
+  )
+
+  # Load data
+  car_data <- data
+ 
+  # Standardize brand names and handle NA values
+  car_data$make <- tolower(car_data$make) # Ensure case-insensitivity
+  car_data$make <- ifelse(is.na(brand_map[car_data$make]), car_data$make, brand_map[car_data$make]) # Apply map, keep original if NA
+
+  # Optionally remove rows with NA in 'make' if they still exist
+  car_data <- na.omit(car_data)
+
+  return(car_data)
+}
+
 # Load and prepare US state map data
 prepare_state_map <- function() {
   states_sf <- map_data("state") %>%
@@ -88,23 +118,36 @@ prepare_state_map <- function() {
   return(states_sf)
 }
 
-  # Convert state abbreviations to full state names
-  convert_to_DT <- function(data) {
-    data$state <- sapply(data$state, function(abbr) {
-      if (tolower(abbr) %in% names(state_map)) {
-        state_map[[tolower(abbr)]]
-      } else {
-        NA # Return NA if no matching abbreviation is found
-      }
-    })
+# Convert state abbreviations to full state names
+convert_to_DT <- function(data) {
+  data$state <- sapply(data$state, function(abbr) {
+    if (tolower(abbr) %in% names(state_map)) {
+      state_map[[tolower(abbr)]]
+    } else {
+      NA # Return NA if no matching abbreviation is found
+    }
+  })
 
-    # Select the necessary columns after updating the state names
-    data <- data %>%
-      select(make, model, state, odometer, color, sellingprice)
+  # Select the necessary columns after updating the state names
+  data <- data %>%
+    select(make, model, state, odometer, color, sellingprice)
 
-    return(data)
-  }
+  return(data)
+}
 
+summarize_data <- function(data) {
+  data %>%
+    group_by(state) %>%
+    summarise(
+      total_sales = n(),
+      avg_price = mean(sellingprice, na.rm = TRUE),
+      top_make = if_else(length(names(which.max(table(make)))) > 0, names(which.max(table(make)))[1], NA_character_),
+      top_model = if_else(length(names(which.max(table(model)))) > 0, names(which.max(table(model)))[1], NA_character_)
+    )
+}
+
+state_map_car_data <- prepare_car_data(car_data)
+states_sf <- prepare_state_map()
 
 ############################################################
 # SECTION 2: UI for Shiny App
@@ -118,6 +161,7 @@ ui <- fluidPage(
   
   titlePanel("Car Price Analysis Dashboard"),
   
+  # Conditional filter based on tab
   sidebarLayout(
     sidebarPanel(
       conditionalPanel(
@@ -187,6 +231,7 @@ ui <- fluidPage(
         # Second Tab: Sales and Prices Map
         tabPanel("Sales and Prices Map",
                  h4("Interactive Map of Car Sales and Average Prices"),
+                 helpText("Begin adjusting the slider to view the map data."),
                  leafletOutput("map", height = "600px"),
                  DTOutput("dataTable")
         ),
@@ -275,47 +320,35 @@ server <- function(input, output, session) {
   ## Sales and Prices Map
   ### Reactive elements
   sales_price_map <- reactive({
-    car_data %>%
-      filter(year >= input$yearRange[1] & year <= input$yearRange[2],
-             odometer >= input$odometerRange[1] & odometer <= input$odometerRange[2],
-             make %in% input$make)
+    state_map_car_data %>%
+      filter(
+        year >= input$yearRange[1] & year <= input$yearRange[2],
+        odometer >= input$odometerRange[1] & odometer <= input$odometerRange[2],
+        make %in% input$make
+      )
   })
-  
-  # Map centered on the USA
-  output$map <- renderLeaflet({
-    leaflet(data = states_sf) %>%
-      addProviderTiles(providers$CartoDB.Positron) %>%
-      setView(lng = -98.583, lat = 39.833, zoom = 4)  # Center on the USA
-  })
-  
+
   # Update the map with filtered data
   observe({
     # Join filtered data with spatial data and remove states with no sales data
-    state_data <- sales_price_map()  %>%
-       group_by(state) %>%
-       summarise(
-         total_sales = n(),
-         avg_price = mean(sellingprice, na.rm = TRUE),
-         top_make = if_else(length(names(which.max(table(make)))) > 0, names(which.max(table(make)))[1], NA_character_),
-         top_model = if_else(length(names(which.max(table(model)))) > 0, names(which.max(table(model)))[1], NA_character_)
-       )%>%
+    state_data <- summarize_data(sales_price_map()) %>%
       inner_join(states_sf, by = "state") %>%
       st_as_sf()
-    
+
     # Update polygons and legend with filtered data
     leafletProxy("map", data = state_data) %>%
       clearShapes() %>%
       clearControls() %>%
       addPolygons(
-        fillColor = ~colorBin("YlGnBu", state_data$avg_price, bins = 5)(avg_price),
+        fillColor = ~ colorBin("YlGnBu", state_data$avg_price, bins = 5)(avg_price),
         color = "black", weight = 1,
         fillOpacity = 0.7,
         highlightOptions = highlightOptions(
           weight = 5, color = "#666", fillOpacity = 0.7, bringToFront = TRUE
         ),
-        popup = ~paste(
-          "<b>State:</b>", state_map[state], 
-          "<br><b>Total Sales:</b>", total_sales, 
+        popup = ~ paste(
+          "<b>State:</b>", state_map[state],
+          "<br><b>Total Sales:</b>", total_sales,
           "<br><b>Avg Price:</b> $", formatC(avg_price, format = "f", digits = 2),
           "<br><b>Top Make:</b>", top_make,
           "<br><b>Top Model:</b>", top_model
@@ -330,6 +363,14 @@ server <- function(input, output, session) {
       )
   })
   
+  # Map centered on the USA
+  output$map <- renderLeaflet({
+    leaflet(data = states_sf) %>%
+      addProviderTiles(providers$CartoDB.Positron) %>%
+      setView(lng = -98.583, lat = 39.833, zoom = 4)  # Center on the USA
+  })
+
+  
   # Table
   output$dataTable <- renderDT({
     datatable(
@@ -339,33 +380,34 @@ server <- function(input, output, session) {
   })
   
   ## Color VS. Price Plot
-output$colorPricePlot <- renderPlot({
- ms2_data <- car_data %>%
-    filter(color != "—" & !grepl("^[0-9]+$", color) & !is.na(color) & color != "") %>%
-    mutate(color = ifelse(color == "lime", NA, color))  # Replace "lime" with NA
+  output$colorPricePlot <- renderPlot({
+    ms2_data <- car_data %>%
+      filter(color != "—" & !grepl("^[0-9]+$", color) & !is.na(color) & color != "") %>%
+      mutate(color = ifelse(color == "lime", NA, color)) # Replace "lime" with NA
 
-ms2_data_avg <- ms2_data %>%
-  group_by(year, color) %>%
-  summarize(avg_price = mean(sellingprice, na.rm = TRUE), .groups = "drop") %>%
-  filter(!is.na(color)) 
+    ms2_data_avg <- ms2_data %>%
+      group_by(year, color) %>%
+      summarize(avg_price = mean(sellingprice, na.rm = TRUE), .groups = "drop") %>%
+      filter(!is.na(color))
 
-recent_years = max(ms2_data$year) - 2
-color_recent_avg = ms2_data %>%
-    filter(year > recent_years) %>%
-    group_by(color) %>%
-    summarize(recent_avg_price = mean(sellingprice, na.rm = TRUE)) %>%
-    arrange(desc(recent_avg_price)) %>%
-    pull(color)
+    recent_years = max(ms2_data$year) - 2
+    color_recent_avg = ms2_data %>%
+      filter(year > recent_years) %>%
+      group_by(color) %>%
+      summarize(recent_avg_price = mean(sellingprice, na.rm = TRUE)) %>%
+      arrange(desc(recent_avg_price)) %>%
+      pull(color)
 
-ms2_data_avg$color <- factor(ms2_data_avg$color, levels = color_recent_avg)
+    ms2_data_avg$color <- factor(ms2_data_avg$color, levels = color_recent_avg)
 
-ggplot(ms2_data_avg, aes(x = year, y = avg_price)) +
-    geom_line(color = "skyblue") +
-    labs(title = "Average Price Over Time by Car Color", x = "Year", y = "Price (USD)") +
-    theme_minimal() +
-    facet_wrap(~ color) +
-    theme(axis.text.x = element_text(angle = 45, hjust = 1))
-})
+    ggplot(ms2_data_avg, aes(x = year, y = avg_price)) +
+      geom_line(color = "skyblue") +
+      labs(title = "Average Price Over Time by Car Color", x = "Year", y = "Price (USD)") +
+      theme_minimal() +
+      facet_wrap(~color) +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  })
+  
 
 
   ## Selling Price VS. Odometer
