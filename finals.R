@@ -9,6 +9,7 @@ library(readr)
 library(maps)
 library(DT)
 
+options(shiny.autoreload = TRUE)
 
 ############################################################
 # SECTION 1: DATA PREPARATION
@@ -16,7 +17,7 @@ library(DT)
 
 # Function to read car data csv file
 car_file <- function() {
-    read_csv("https://uwmadison.box.com/shared/static/m1fc9k18oy62to1bjuslsjli0kub5xrl.csv", show_col_types = FALSE)
+    
 }
 
 # Function to load and prepare car data
@@ -39,7 +40,7 @@ prepare_car_data <- function() {
   )
   
   # Load the car data from a CSV file
-  car_data <- car_file()
+  car_data <- read_csv("https://uwmadison.box.com/shared/static/m1fc9k18oy62to1bjuslsjli0kub5xrl.csv", show_col_types = FALSE)
   
   # Standardize brand names and handle NA values
   car_data$make <- tolower(car_data$make) # Ensure case-insensitivity
@@ -68,7 +69,7 @@ prepare_state_map <- function() {
 }
 
 # Load Data
-car_data_price <- car_file()
+car_data_price <- read.csv('https://uwmadison.box.com/shared/static/e73vopf1jcyi3fwyu6pkb8jp2xnqu3zg.csv')
 car_data <- prepare_car_data()
 states_sf <- prepare_state_map()
 
@@ -101,54 +102,55 @@ ui <- fluidPage(
       
       # Car Profitability Analysis Tab
       nav_panel(
-        "Car Profitability Analysis",
-        
-        # Multiple selection filters for genres and ratings
-        fluidRow(
-            column(
-                width = 6,
-                sliderInput("profit_threshold",
-                    "Minimum Profitability:",
-                    min = 0, max = 5000, value = 1000, step = 100),
-                selectInput("make_filter",
-                    "Select Car Make:",
-                    choices = c("All", unique(tolower(car_data_price$make))),
-                    selected = "All"),
-                textInput("model_filter",
-                    "Filter by Model (Optional):",
-                    value = ""),
-                checkboxInput("remove_outliers", "Exclude Outliers (Avg Profit > $30,000)", value = FALSE)
-            ),
-            column(
-                width = 6, 
-                p("This app analyzes car profitability based on data from multiple car makes and models.
-                    It uses average market price of vehicles to determine which makes & models tend to 
+          "Car Profitability Analysis",
+
+          # Multiple selection filters for genres and ratings
+          fluidRow(
+              column(
+                  width = 6,
+                  sliderInput("profit_threshold",
+                      "Minimum Profitability:",
+                      min = 0, max = 5000, value = 1000, step = 100
+                  ),
+                  selectInput("make_filter",
+                      "Select Car Make:",
+                      choices = c("All", unique(tolower(car_data_price$make))),
+                      selected = "All"
+                  ),
+                  textInput("model_filter",
+                      "Filter by Model (Optional):",
+                      value = ""
+                  ),
+                  checkboxInput("remove_outliers", "Exclude Outliers (Avg Profit > $30,000)", value = FALSE)
+              ),
+              column(
+                  width = 6,
+                  p("This app analyzes car profitability based on data from multiple car makes and models.
+                    It uses average market price of vehicles to determine which makes & models tend to
                     have higher selling prices than their market value, indicating higher chances of profitability
                     for sellers.
-                    Use the controls in the sidebar to filter the data based on profitability thresholds, 
+                    Use the controls in the sidebar to filter the data based on profitability thresholds,
                     car make, and model. You can also exclude outliers with extremely high profitability."),
-                p("Use the controls in the sidebar to filter the data based on profitability thresholds, 
+                  p("Use the controls in the sidebar to filter the data based on profitability thresholds,
                     car make, and model. You can also exclude outliers with extremely high profitability.
-                    The bar chart visualizes average profitability for each make and model, while the table 
+                    The bar chart visualizes average profitability for each make and model, while the table
                     provides detailed numerical data.")
-            ),
-
-            
-            ),
-        
-        fluidRow(
-          column(
-            12,
-            h3("Bar Chart"),
-            plotlyOutput("profitPlot", height = "500px")),
-            h3("Table"),
-            tableOutput("profitTable"))
+              ),
+          ),
+          fluidRow(
+              column(
+                  12,
+                  h3("Bar Chart"),
+                  plotlyOutput("profitPlot", height = "500px")
+              ),
+              h3("Table"),
+              tableOutput("profitTable")
           )
-        )
       ),
       
-      
       nav_panel(
+        "Car Price By State",
+        h3("Total Number of Sales and Average Vehicle Price by U.S. State"),
         fluidRow(
             column(
                 12,
@@ -182,8 +184,10 @@ ui <- fluidPage(
                 DTOutput("dataTable")
             )
         )
-      ),
+      )
     )
+    ) 
+)
 
 
 server <- function(input, output) {
