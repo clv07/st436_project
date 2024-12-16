@@ -7,6 +7,13 @@ library(shiny)
 library(plotly)    
 library(viridis)   
 library(tidyverse)
+library(sf)
+
+options(shiny.autoreload = TRUE)
+
+############################################################
+# SECTION 1: DATA PREPARATION
+############################################################
 
 car_data <- read.csv('https://uwmadison.box.com/shared/static/e73vopf1jcyi3fwyu6pkb8jp2xnqu3zg.csv')
 
@@ -50,6 +57,59 @@ car_data_odometer_sampled <- car_data_odometer_sampled %>%
   left_join(lm_params_odometer, by = "make") %>%
   mutate(predicted_price = intercept + slope * odometer)
 
+state_map <- c(
+  "al" = "Alabama", "ak" = "Alaska", "az" = "Arizona", "ar" = "Arkansas", "ca" = "California",
+  "co" = "Colorado", "ct" = "Connecticut", "de" = "Delaware", "fl" = "Florida", "ga" = "Georgia",
+  "hi" = "Hawaii", "id" = "Idaho", "il" = "Illinois", "in" = "Indiana", "ia" = "Iowa",
+  "ks" = "Kansas", "ky" = "Kentucky", "la" = "Louisiana", "me" = "Maine", "md" = "Maryland",
+  "ma" = "Massachusetts", "mi" = "Michigan", "mn" = "Minnesota", "ms" = "Mississippi", "mo" = "Missouri",
+  "mt" = "Montana", "ne" = "Nebraska", "nv" = "Nevada", "nh" = "New Hampshire", "nj" = "New Jersey",
+  "nm" = "New Mexico", "ny" = "New York", "nc" = "North Carolina", "nd" = "North Dakota", "oh" = "Ohio",
+  "ok" = "Oklahoma", "or" = "Oregon", "pa" = "Pennsylvania", "ri" = "Rhode Island", "sc" = "South Carolina",
+  "sd" = "South Dakota", "tn" = "Tennessee", "tx" = "Texas", "ut" = "Utah", "vt" = "Vermont",
+  "va" = "Virginia", "wa" = "Washington", "wv" = "West Virginia", "wi" = "Wisconsin", "wy" = "Wyoming",
+  "dc" = "District of Columbia"
+)
+
+### Helper functions
+# Load and prepare US state map data
+prepare_state_map <- function() {
+  states_sf <- map_data("state") %>%
+    rename(state = region) %>%
+    st_as_sf(coords = c("long", "lat"), crs = 4326) %>%
+    group_by(state) %>%
+    summarise(geometry = st_combine(geometry)) %>%
+    st_cast("MULTILINESTRING")
+  
+  # Add state abbreviations
+  state_abbr <- setNames(state.abb, tolower(state.name))
+  states_sf <- states_sf %>%
+    mutate(state = tolower(state_abbr[state]))
+  return(states_sf)
+}
+
+  # Convert state abbreviations to full state names
+  convert_to_DT <- function(data) {
+    data$state <- sapply(data$state, function(abbr) {
+      if (tolower(abbr) %in% names(state_map)) {
+        state_map[[tolower(abbr)]]
+      } else {
+        NA # Return NA if no matching abbreviation is found
+      }
+    })
+
+    # Select the necessary columns after updating the state names
+    data <- data %>%
+      select(make, model, state, odometer, color, sellingprice)
+
+    return(data)
+  }
+
+
+############################################################
+# SECTION 2: UI for Shiny App
+############################################################
+
 ui <- fluidPage(
   theme = bs_theme(
     version = 5,
@@ -78,6 +138,24 @@ ui <- fluidPage(
         condition = "input.tabs == 'Selling Price VS. Odometer'",
         h4("Hover Information"),
         verbatimTextOutput("hover_info_box") # Display hover info here
+      ),
+       conditionalPanel(
+        condition = "input.tabs == 'Sales and Prices Map'",
+        helpText("Use the filters below to explore car sales and average prices across the United States."),
+        sliderInput("yearRange", "Select Year Range:",
+                    min = min(car_data$year, na.rm = TRUE),
+                    max = max(car_data$year, na.rm = TRUE),
+                    value = c(min(car_data$year, na.rm = TRUE), max(car_data$year, na.rm = TRUE))),
+        helpText("Adjust the year range to focus on cars sold within specific years."),
+        sliderInput("odometerRange", "Select Odometer Range:",
+                    min = min(car_data$odometer, na.rm = TRUE),
+                    max = max(car_data$odometer, na.rm = TRUE),
+                    value = c(min(car_data$odometer, na.rm = TRUE), max(car_data$odometer, na.rm = TRUE))),
+        helpText("Use the odometer range to filter cars based on mileage. Set the range from low to high miles."),
+        selectInput("make", "Select Vehicle Make:", 
+                    choices = unique(car_data$make), 
+                    selected = "Ford", multiple = TRUE),
+        helpText("Select one or more car makes to view their average prices and sales data.")
       )
     ),
     
@@ -109,7 +187,8 @@ ui <- fluidPage(
         # Second Tab: Sales and Prices Map
         tabPanel("Sales and Prices Map",
                  h4("Interactive Map of Car Sales and Average Prices"),
-                 leafletOutput("map", height = "600px")
+                 leafletOutput("map", height = "600px"),
+                 DTOutput("dataTable")
         ),
         
         # Third Tab: Color VS. Price
@@ -129,10 +208,14 @@ ui <- fluidPage(
   )
 )
 
-# Server
+############################################################
+# SECTION 3: Server for Shiny App
+############################################################
+
 server <- function(input, output, session) {
   
   ## Car Profitability Analysis
+  ### Reactive Elements
   processed_data <- reactive({
     car_data %>%
       filter(!is.na(mmr) & !is.na(sellingprice) & !is.na(make) & !is.na(model)) %>%
@@ -164,6 +247,7 @@ server <- function(input, output, session) {
     data %>% filter(avg_profit >= input$profit_threshold)
   })
   
+  ### Bar plot
   output$profitPlot <- renderPlotly({
     data <- car_profit_data()
     p <- ggplot(data, aes(
@@ -181,14 +265,78 @@ server <- function(input, output, session) {
     ggplotly(p, tooltip = "text")
   })
   
+  ### Table
   output$profitTable <- renderTable({
     car_profit_data() %>%
       arrange(desc(avg_profit)) %>%
       rename(Make = make, Model = model, `Average Profit` = avg_profit, `Total Sales` = total_sales)
   })
   
-   ##Sales and Prices Map
-  ###Placeholder
+  ## Sales and Prices Map
+  ### Reactive elements
+  sales_price_map <- reactive({
+    car_data %>%
+      filter(year >= input$yearRange[1] & year <= input$yearRange[2],
+             odometer >= input$odometerRange[1] & odometer <= input$odometerRange[2],
+             make %in% input$make)
+  })
+  
+  # Map centered on the USA
+  output$map <- renderLeaflet({
+    leaflet(data = states_sf) %>%
+      addProviderTiles(providers$CartoDB.Positron) %>%
+      setView(lng = -98.583, lat = 39.833, zoom = 4)  # Center on the USA
+  })
+  
+  # Update the map with filtered data
+  observe({
+    # Join filtered data with spatial data and remove states with no sales data
+    state_data <- sales_price_map()  %>%
+       group_by(state) %>%
+       summarise(
+         total_sales = n(),
+         avg_price = mean(sellingprice, na.rm = TRUE),
+         top_make = if_else(length(names(which.max(table(make)))) > 0, names(which.max(table(make)))[1], NA_character_),
+         top_model = if_else(length(names(which.max(table(model)))) > 0, names(which.max(table(model)))[1], NA_character_)
+       )%>%
+      inner_join(states_sf, by = "state") %>%
+      st_as_sf()
+    
+    # Update polygons and legend with filtered data
+    leafletProxy("map", data = state_data) %>%
+      clearShapes() %>%
+      clearControls() %>%
+      addPolygons(
+        fillColor = ~colorBin("YlGnBu", state_data$avg_price, bins = 5)(avg_price),
+        color = "black", weight = 1,
+        fillOpacity = 0.7,
+        highlightOptions = highlightOptions(
+          weight = 5, color = "#666", fillOpacity = 0.7, bringToFront = TRUE
+        ),
+        popup = ~paste(
+          "<b>State:</b>", state_map[state], 
+          "<br><b>Total Sales:</b>", total_sales, 
+          "<br><b>Avg Price:</b> $", formatC(avg_price, format = "f", digits = 2),
+          "<br><b>Top Make:</b>", top_make,
+          "<br><b>Top Model:</b>", top_model
+        )
+      ) %>%
+      addLegend(
+        pal = colorBin("YlGnBu", state_data$avg_price, bins = 5),
+        values = ~avg_price,
+        opacity = 0.7,
+        title = "Avg Price (USD $)",
+        position = "bottomright"
+      )
+  })
+  
+  # Table
+  output$dataTable <- renderDT({
+    datatable(
+      convert_to_DT(sales_price_map()),
+      options = list(pageLength = 10, autoWidth = TRUE)
+    )
+  })
   
   ## Color VS. Price Plot
 output$colorPricePlot <- renderPlot({
