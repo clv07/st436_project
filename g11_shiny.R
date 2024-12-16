@@ -224,7 +224,7 @@ ui <- fluidPage(
         # First Tab: Car Profitability Analysis
         tabPanel("Car Profitability Analysis",
                  h4("Car Profitability Analysis"),
-                 plotlyOutput("profitPlot", height = "500px"),
+                 plotlyOutput("profitPlot", height = "750px"),
                  tableOutput("profitTable")
         ),
         
@@ -232,6 +232,7 @@ ui <- fluidPage(
         tabPanel("Sales and Prices Map",
                  h4("Interactive Map of Car Sales and Average Prices"),
                  helpText("Begin adjusting the slider to view the map data."),
+                 helpText("Click to select a state to view detailed information."),
                  leafletOutput("map", height = "600px"),
                  DTOutput("dataTable")
         ),
