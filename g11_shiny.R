@@ -9,6 +9,7 @@ library(viridis)
 library(tidyverse)
 library(maps)
 library(sf)
+library(DT)
 
 ############################################################
 # SECTION 1: DATA PREPARATION
